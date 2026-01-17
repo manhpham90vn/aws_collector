@@ -132,6 +132,54 @@ cargo run --release -- collect \
 > - Nếu **có** chỉ định `--create-new-file`: Tạo file mới với timestamp (format: `YYYYMMDD_HHMMSS`)
 > - **Concurrency**: Giới hạn từ 1-10, default là 5. Tăng concurrency sẽ nhanh hơn nhưng tốn nhiều tài nguyên
 
+## Architecture
+
+### **Parallel Execution** 🆕
+
+Tool sử dụng **3-level parallel execution** để tối ưu performance:
+
+```
+Level 1: Services (Concurrent)
+├── S3 Collector ─────────┐
+├── Lambda Collector ─────┤
+├── ECR Collector ────────┤  ← Chạy song song (max 5-10 concurrent)
+├── RDS Collector ────────┤
+└── ... ──────────────────┘
+
+Level 2: Resources (Concurrent per service)
+└── S3 Collector
+    ├── Bucket 1 ─────────┐
+    ├── Bucket 2 ─────────┤
+    ├── Bucket 3 ─────────┤  ← Chạy song song (max 5-10 concurrent)
+    └── ... ──────────────┘
+
+Level 3: Details (Concurrent per resource) 🆕
+└── Bucket 1
+    ├── Get Location ─────┐
+    ├── Get Versioning ───┤
+    ├── Get Encryption ───┤
+    ├── Get Lifecycle ────┤  ← Chạy song song (max 10 concurrent)
+    ├── Get Tags ─────────┤
+    └── ... ──────────────┘
+```
+
+**Performance Impact:**
+- **Before**: Detail commands chạy tuần tự → ~3.6s per bucket (18 commands × 200ms)
+- **After**: Detail commands chạy song song → ~400ms per bucket (2 batches × 200ms)
+- **Speedup**: ~9x faster! 🚀
+
+**Collectors sử dụng parallel execution:**
+- S3 (18 detail commands)
+- Lambda (7 detail commands)
+- ECR (4 detail commands)
+- CloudWatch (2 detail commands)
+- SNS (3 detail commands)
+- ACM (certificate details + tags)
+- ELB (2 detail commands for LBs and TGs)
+- Route53 (record sets + tags)
+
+
+
 ## Performance
 
 ### **Comparison Table**
